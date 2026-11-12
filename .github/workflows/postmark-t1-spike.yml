@@ -1,0 +1,88 @@
+name: postmark-t1-spike
+
+# Postmark T1 spike (Distro goal files/35): ONE unbranded Thunderbird
+# 115.18.0esr build attempt on the program's macOS CI line.
+# Self-contained: no checkout (the fork tree is the comm mirror; the build
+# consumes the official Mozilla release source archive, hash-pinned).
+on:
+  workflow_dispatch: {}
+
+jobs:
+  spike:
+    runs-on: macos-13
+    timeout-minutes: 350
+    steps:
+      - name: Environment + source + toolchain bootstrap + build
+        shell: bash
+        run: |
+          set -u
+          exec > >(tee -a "$HOME/spike.log") 2>&1
+          echo "=== ENV ==="
+          sw_vers; uname -a; df -h / | tail -1; sysctl -n hw.ncpu; sysctl -n hw.memsize
+          ls /Applications/ | grep -i xcode || true
+          xcodebuild -version || true
+          xcrun --show-sdk-version || true
+          # Prefer the era-closest installed Xcode (14.x ships SDK 13.x, inside
+          # the ESR-115 supported build era); fall back to the default select.
+          for xc in /Applications/Xcode_14.3.app /Applications/Xcode_14.2.app /Applications/Xcode_14.1.app; do
+            if [ -d "$xc" ]; then sudo xcode-select -s "$xc"; echo "selected $xc"; break; fi
+          done
+          xcodebuild -version; xcrun --show-sdk-version
+          python3 --version || true
+          ls /usr/local/Cellar 2>/dev/null | head || true
+          echo "=== SOURCE ==="
+          cd "$HOME"
+          curl -sL -o tb.tar.xz "https://archive.mozilla.org/pub/thunderbird/releases/115.18.0/source/thunderbird-115.18.0.source.tar.xz"
+          echo "9551b1a402e2f88252cbc900a1adaf827de64d0184eb59a97d9b3019ab39fb08  tb.tar.xz" | shasum -a 256 -c -
+          mkdir src && tar -xf tb.tar.xz -C src --strip-components=1
+          cd src
+          cat config/milestone.txt || true
+          cat comm/mail/config/version.txt 2>/dev/null || cat mail/config/version.txt || true
+          echo "=== BOOTSTRAP ==="
+          ./mach --no-interactive bootstrap --application-choice comm || ./mach --no-interactive bootstrap
+          echo "=== CONFIGURE+BUILD ==="
+          cat > .mozconfig <<'EOF'
+          ac_add_options --enable-application=comm/mail
+          ac_add_options --enable-release
+          ac_add_options --disable-tests
+          ac_add_options --disable-debug
+          ac_add_options --enable-optimize
+          ac_add_options --target=x86_64-apple-darwin
+          mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-spike
+          EOF
+          ./mach build -j3
+          echo "=== PACKAGE ==="
+          ./mach package
+          echo "=== READBACK ==="
+          ls -la obj-spike/dist/ || true
+          APP=$(find obj-spike/dist -maxdepth 3 -name "*.app" | head -1)
+          echo "APP=$APP"
+          if [ -n "$APP" ]; then
+            /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Contents/Info.plist" || true
+            /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" || true
+            /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist" || true
+            BIN="$APP/Contents/MacOS/thunderbird"
+            [ -f "$BIN" ] || BIN=$(find "$APP/Contents/MacOS" -type f | head -1)
+            echo "BIN=$BIN"; file "$BIN" || true; lipo -info "$BIN" || true
+            otool -L "$BIN" | head -20 || true
+            cp "$APP/Contents/Info.plist" "$HOME/Info.plist.readback"
+          fi
+          echo "=== SPIKE END ==="
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postmark-t1-evidence
+          path: |
+            ~/spike.log
+            ~/Info.plist.readback
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Upload dmg
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postmark-t1-dmg
+          path: ~/src/obj-spike/dist/*.dmg
+          retention-days: 7
+          if-no-files-found: warn
