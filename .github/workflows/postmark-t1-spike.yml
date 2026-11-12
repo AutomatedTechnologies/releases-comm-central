@@ -4,12 +4,19 @@ name: postmark-t1-spike
 # 115.18.0esr build attempt on the program's macOS CI line.
 # Self-contained: no checkout (the fork tree is the comm mirror; the build
 # consumes the official Mozilla release source archive, hash-pinned).
+# Runner label history: first dispatched 2026-11-12 on macos-13 (run
+# 43279724993) — the job sat queued ~3h with no runner ever assigned while
+# a macos-15 job in the same org picked up in ~5 min; macos-13 is a drained
+# label on this account's line. Cancelled unstarted and re-dispatched on
+# macos-15 (the org's proven live label). Same single attempt; zero build
+# steps had executed. Host is arm64; the target stays x86_64 (cross-compile,
+# first-class in the Mozilla build system).
 on:
   workflow_dispatch: {}
 
 jobs:
   spike:
-    runs-on: macos-13
+    runs-on: macos-15
     timeout-minutes: 350
     steps:
       - name: Environment + source + toolchain bootstrap + build
@@ -22,11 +29,10 @@ jobs:
           ls /Applications/ | grep -i xcode || true
           xcodebuild -version || true
           xcrun --show-sdk-version || true
-          # Prefer the era-closest installed Xcode (14.x ships SDK 13.x, inside
-          # the ESR-115 supported build era); fall back to the default select.
-          for xc in /Applications/Xcode_14.3.app /Applications/Xcode_14.2.app /Applications/Xcode_14.1.app; do
-            if [ -d "$xc" ]; then sudo xcode-select -s "$xc"; echo "selected $xc"; break; fi
-          done
+          # Select the OLDEST installed Xcode (era-closest SDK to the ESR-115
+          # production pin, MacOSX13.3); fall back to the default select.
+          OLDEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -t_ -k2 -V | head -1)
+          if [ -n "$OLDEST" ]; then sudo xcode-select -s "$OLDEST"; echo "selected $OLDEST"; fi
           xcodebuild -version; xcrun --show-sdk-version
           python3 --version || true
           ls /usr/local/Cellar 2>/dev/null | head || true
